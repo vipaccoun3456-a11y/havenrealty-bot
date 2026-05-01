@@ -1,16 +1,13 @@
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import re
+
+logging.basicConfig(level=logging.INFO)
 
 TOKEN = "8745935271:AAHDkRcH3Z59UoBpKENZaf_V32OHRGPMgjo"
-CHANNEL = "@havenrealty_uz"
 MANAGER = "Havenrealtymanager"
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+bot = telebot.TeleBot(TOKEN)
 
 DISTRICTS = [
     "Yunusobod", "Chilonzor", "Mirzo Ulugbek", "Yakkasaroy",
@@ -18,135 +15,106 @@ DISTRICTS = [
     "Bektemir", "Mirobod", "Yashnobod"
 ]
 
-DISTRICT_MAP = {
-    "Yunusobod": ["юнусабад"],
-    "Chilonzor": ["чиланзар"],
-    "Mirzo Ulugbek": ["мирзо улугбек"],
-    "Yakkasaroy": ["яккасарай"],
-    "Shayxontohur": ["шайхантахур"],
-    "Olmazar": ["алмазар"],
-    "Sergeli": ["сергели"],
-    "Uchtepa": ["учтепа"],
-    "Bektemir": ["бектемир"],
-    "Mirobod": ["мирабад"],
-    "Yashnobod": ["яшнабад"],
-}
-
 ROOMS = ["1", "2", "3", "4+"]
 PRICES = ["300-500$", "500-700$", "700-1000$", "1000$+", "Farqi yo'q"]
 
 user_data = {}
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+def district_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    buttons = [InlineKeyboardButton(d, callback_data=f"d|{d}") for d in DISTRICTS]
+    markup.add(*buttons)
+    return markup
+
+def rooms_keyboard():
+    markup = InlineKeyboardMarkup(row_width=4)
+    buttons = [InlineKeyboardButton(f"{r} xona", callback_data=f"r|{r}") for r in ROOMS]
+    markup.add(*buttons)
+    return markup
+
+def price_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    buttons = [InlineKeyboardButton(p, callback_data=f"p|{p}") for p in PRICES]
+    markup.add(*buttons)
+    return markup
+
+def contact_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🔄 Qaytadan", callback_data="restart"),
+        InlineKeyboardButton("📞 Menejer", url=f"https://t.me/{MANAGER}")
+    )
+    return markup
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    user_id = message.from_user.id
     user_data[user_id] = {}
-    keyboard = []
-    row = []
-    for i, d in enumerate(DISTRICTS):
-        row.append(InlineKeyboardButton(d, callback_data=f"d_{d}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    await update.message.reply_text(
-        "🏙 Assalomu alaykum! Tumanni tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    bot.send_message(
+        message.chat.id,
+        "🏙 Assalomu alaykum! Qaysi tumandan uy qidiryapsiz?",
+        reply_markup=district_keyboard()
     )
 
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
+@bot.callback_query_handler(func=lambda c: c.data.startswith("d|"))
+def handle_district(call):
+    user_id = call.from_user.id
+    district = call.data.split("|")[1]
+    user_data[user_id] = {"district": district}
+    bot.edit_message_text(
+        f"✅ Tuman: {district}\n\n🚪 Xona sonini tanlang:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=rooms_keyboard()
+    )
 
-    if user_id not in user_data:
-        user_data[user_id] = {}
+@bot.callback_query_handler(func=lambda c: c.data.startswith("r|"))
+def handle_rooms(call):
+    user_id = call.from_user.id
+    rooms = call.data.split("|")[1]
+    user_data[user_id]["rooms"] = rooms
+    district = user_data[user_id].get("district", "")
+    bot.edit_message_text(
+        f"✅ Tuman: {district}\n✅ Xona: {rooms}\n\n💰 Narx oralig'ini tanlang:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=price_keyboard()
+    )
 
-    if data.startswith("d_"):
-        user_data[user_id]["district"] = data[2:]
-        keyboard = [[InlineKeyboardButton(f"{r} xona", callback_data=f"r_{r}") for r in ROOMS]]
-        await query.edit_message_text("🚪 Xona sonini tanlang:", reply_markup=InlineKeyboardMarkup(keyboard))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("p|"))
+def handle_price(call):
+    user_id = call.from_user.id
+    price = call.data.split("|")[1]
+    user_data[user_id]["price"] = price
+    filters = user_data[user_id]
 
-    elif data.startswith("r_"):
-        user_data[user_id]["rooms"] = data[2:]
-        keyboard = [
-            [InlineKeyboardButton(p, callback_data=f"p_{p}") for p in PRICES[:2]],
-            [InlineKeyboardButton(p, callback_data=f"p_{p}") for p in PRICES[2:]]
-        ]
-        await query.edit_message_text("💰 Narx oralig'ini tanlang:", reply_markup=InlineKeyboardMarkup(keyboard))
+    bot.edit_message_text(
+        "🔍 Qidirilmoqda...",
+        call.message.chat.id,
+        call.message.message_id
+    )
 
-    elif data.startswith("p_"):
-        user_data[user_id]["price"] = data[2:]
-        filters = user_data[user_id]
-        district = filters.get("district", "")
-        rooms = filters.get("rooms", "")
+    bot.send_message(
+        call.message.chat.id,
+        f"📋 Qidiruv natijalari:\n\n"
+        f"🏙 Tuman: {filters.get('district')}\n"
+        f"🚪 Xona: {filters.get('rooms')}\n"
+        f"💰 Narx: {filters.get('price')}\n\n"
+        f"Menejer siz uchun mos variantlarni topib beradi!",
+        reply_markup=contact_keyboard()
+    )
 
-        await query.edit_message_text("🔍 Qidirilmoqda...")
-
-        keywords = DISTRICT_MAP.get(district, [district.lower()])
-
-        try:
-            found = []
-            async for msg in context.bot.get_chat_history(CHANNEL, limit=200):
-                if not msg.text:
-                    continue
-                text = msg.text.lower()
-                if not any(kw in text for kw in keywords):
-                    continue
-                if rooms and rooms != "4+":
-                    if f"количество комнат: {rooms}" not in text:
-                        continue
-                found.append(msg.text[:500])
-                if len(found) >= 3:
-                    break
-        except Exception as e:
-            logging.error(f"Xato: {e}")
-            found = []
-
-        contact_btn = [[
-            InlineKeyboardButton("🔄 Qaytadan", callback_data="restart"),
-            InlineKeyboardButton("📞 Menejer", url=f"https://t.me/{MANAGER}")
-        ]]
-
-        if found:
-            for i, listing in enumerate(found, 1):
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=f"📌 E'lon {i}:\n\n{listing}"
-                )
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=f"✅ {len(found)} ta e'lon topildi!",
-                reply_markup=InlineKeyboardMarkup(contact_btn)
-            )
-        else:
-            await query.edit_message_text(
-                "😔 Mos e'lon topilmadi. Menejer bilan bog'laning!",
-                reply_markup=InlineKeyboardMarkup(contact_btn)
-            )
-
-    elif data == "restart":
-        user_data[user_id] = {}
-        keyboard = []
-        row = []
-        for d in DISTRICTS:
-            row.append(InlineKeyboardButton(d, callback_data=f"d_{d}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        await query.edit_message_text(
-            "🏙 Tumanni tanlang:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+@bot.callback_query_handler(func=lambda c: c.data == "restart")
+def handle_restart(call):
+    user_id = call.from_user.id
+    user_data[user_id] = {}
+    bot.edit_message_text(
+        "🏙 Qaysi tumandan uy qidiryapsiz?",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=district_keyboard()
+    )
 
 if __name__ == "__main__":
-    main()
+    logging.info("Bot ishga tushdi!")
+    bot.infinity_polling()
